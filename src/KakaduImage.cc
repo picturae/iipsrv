@@ -147,17 +147,17 @@ void KakaduImage::loadImageInfo( int seq, int ang ) throw(string)
   // We calculate ourselves rather than relying on get_dims() to force a similar
   // behaviour to TIFF with resolutions at floor(x/2) rather than Kakadu's default ceil(x/2) 
   for( unsigned int c=1; c<numResolutions; c++ ){
-    //    codestream.apply_input_restrictions(0,0,c,1,NULL,KDU_WANT_OUTPUT_COMPONENTS);
-    //    kdu_dims layers;
-    //    codestream.get_dims(0,layers,true);
-    //    image_widths.push_back(layers.size.x);
-    //    image_heights.push_back(layers.size.y);
-    w = floor( w/2.0 );
-    h = floor( h/2.0 );
-    image_widths.push_back(w);
-    image_heights.push_back(h);
+    codestream.apply_input_restrictions(0,0,c,1,NULL,KDU_WANT_OUTPUT_COMPONENTS);
+    kdu_dims layers;
+    codestream.get_dims(0,layers,true);
+    image_widths.push_back(layers.size.x);
+    image_heights.push_back(layers.size.y);
+    //w = floor( w/2.0 );
+    //h = floor( h/2.0 );
+    //image_widths.push_back(w);
+    //image_heights.push_back(h);
 #ifdef DEBUG
-    logfile << "Kakadu :: Resolution : " << w << "x" << h << endl;
+    logfile << "Kakadu :: Resolution : " << layers.size.x << "x" << layers.size.y << endl;
 #endif
   }
 
@@ -170,8 +170,8 @@ void KakaduImage::loadImageInfo( int seq, int ang ) throw(string)
   h = image_heights[0];
   while( (w>tile_width) || (h>tile_height) ){
     n++;
-    w = floor( w/2.0 );
-    h = floor( h/2.0 );
+    w = ceil( w/2.0 );
+    h = ceil( h/2.0 );
     if( n > numResolutions ){
       image_widths.push_back(w);
       image_heights.push_back(h);
