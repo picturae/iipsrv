@@ -147,7 +147,7 @@ void IIPImage::testImageType()
 
   }
   else{
-
+/*
 #ifdef HAVE_GLOB_H
 
     // Check for sequence
@@ -181,10 +181,12 @@ void IIPImage::testImageType()
     updateTimestamp( tmp );
 
 #else
+*/
     string message = path + string( " is not a regular file and no glob support enabled" );
     throw file_error( message );
+/*
 #endif
-
+*/
   }
 
 }
