@@ -5,7 +5,7 @@
     * (www.oldmapsonline.org) from Ministry of Culture of the Czech Republic      *
 
 
-    Copyright (C) 2008-2013 Ruven Pillay.
+    Copyright (C) 2008-2020 Ruven Pillay.
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -37,7 +37,6 @@ using namespace std;
 void Zoomify::run( Session* session, const std::string& argument ){
 
   if( session->loglevel >= 3 ) (*session->logfile) << "Zoomify handler reached" << endl;
-  session = session;
 
   // Time this command
   if( session->loglevel >= 2 ) command_timer.start();
@@ -59,16 +58,13 @@ void Zoomify::run( Session* session, const std::string& argument ){
   FIF fif;
   fif.run( session, prefix );
 
-  // Load image info
-  (*session->image)->loadImageInfo( session->view->xangle, session->view->yangle );
-
 
   // Get the full image size and the total number of resolutions available
   unsigned int width = (*session->image)->getImageWidth();
   unsigned int height = (*session->image)->getImageHeight();
 
 
-  unsigned int tw = (*session->image)->getTileWidth();
+  int tw = (*session->image)->getTileWidth();
   unsigned int numResolutions = (*session->image)->getNumResolutions();
 
 
@@ -79,9 +75,15 @@ void Zoomify::run( Session* session, const std::string& argument ){
 
   unsigned int discard = 0;
 
+  unsigned int ntiles = 1;
+
   for( n=0; n<numResolutions; n++ ){
-    if( (*session->image)->image_widths[n] < tw && (*session->image)->image_heights[n] < tw ){
+    int width = (*session->image)->image_widths[n];
+    int height = (*session->image)->image_heights[n];
+    if( width < tw && height < tw ){
       discard++;
+    } else {
+      ntiles += (int) ceil( (double)width/tw ) * (int) ceil( (double)height/tw );
     }
   }
 
@@ -105,19 +107,13 @@ void Zoomify::run( Session* session, const std::string& argument ){
 			  << ", image height: " << height << endl;
     }
 
-    int ntiles = (int) ceil( (double)width/tw ) * (int) ceil( (double)height/tw );
+    // Format our output
+    stringstream header;
+    header << session->response->createHTTPHeader( "xml", (*session->image)->getTimestamp() )
+	   << "<IMAGE_PROPERTIES WIDTH=\"" << width << "\" HEIGHT=\"" << height << "\" "
+	   << "NUMTILES=\"" << ntiles << "\" NUMIMAGES=\"1\" VERSION=\"1.8\" TILESIZE=\"" << tw << "\"/>";
 
-    char str[1024];
-    snprintf( str, 1024,
-	      "Server: iipsrv/%s\r\n"
-	      "Content-Type: application/xml\r\n"
-	      "Cache-Control: max-age=%d\r\n"
-	      "Last-Modified: %s\r\n"
-	      "\r\n"
-	      "<IMAGE_PROPERTIES WIDTH=\"%d\" HEIGHT=\"%d\" NUMTILES=\"%d\" NUMIMAGES=\"1\" VERSION=\"1.8\" TILESIZE=\"%d\" />",
-	      VERSION, MAX_AGE,(*session->image)->getTimestamp().c_str(), width, height, ntiles, tw );
-
-    session->out->printf( (const char*) str );
+    session->out->printf( (const char*) header.str().c_str() );
     session->response->setImageSent();
 
     return;
@@ -127,7 +123,7 @@ void Zoomify::run( Session* session, const std::string& argument ){
   // Get the tile coordinates. Zoomify requests are of the form r-x-y.jpg
   // where r is the resolution number and x and y are the tile coordinates
   Tokenizer izer( suffix, "-" );
-  int resolution, x, y;
+  int resolution=0, x=0, y=0;
   if( izer.hasMoreTokens() ) resolution = atoi( izer.nextToken().c_str() );
   if( izer.hasMoreTokens() ) x = atoi( izer.nextToken().c_str() );
   if( izer.hasMoreTokens() ) y = atoi( izer.nextToken().c_str() );
@@ -156,89 +152,9 @@ void Zoomify::run( Session* session, const std::string& argument ){
   unsigned int tile = y*ntlx + x;
 
 
-  // Get our tile
-  TileManager tilemanager( session->tileCache, *session->image, session->watermark, session->jpeg, session->logfile, session->loglevel );
-
-  CompressionType ct;
-  if( (*session->image)->getColourSpace() == CIELAB ) ct = UNCOMPRESSED;
-  else if( (*session->image)->getNumBitsPerPixel() == 16 ) ct = UNCOMPRESSED;
-  else ct = JPEG;
-
-
-  RawTile rawtile = tilemanager.getTile( resolution, tile, session->view->xangle,
-					 session->view->yangle, session->view->getLayers(), ct );
-
-  int len = rawtile.dataLength;
-
-  if( session->loglevel >= 3 ){
-    *(session->logfile) << "Zoomify :: Tile size: " << rawtile.width << " x " << rawtile.height << endl
-			<< "Zoomify :: Channels per sample: " << rawtile.channels << endl
-			<< "Zoomify :: Bits per channel: " << rawtile.bpc << endl
-			<< "Zoomify :: Compressed tile size is " << len << endl;
-  }
-
-
-  // Convert CIELAB to sRGB
-  if( (*session->image)->getColourSpace() == CIELAB ){
-
-    Timer cielab_timer;
-    if( session->loglevel >= 4 ){
-      *(session->logfile) << "JTL :: Converting from CIELAB->sRGB" << endl;
-      cielab_timer.start();
-    }
-
-    filter_LAB2sRGB( rawtile );
-
-    if( session->loglevel >= 4 ){
-      *(session->logfile) << "JTL :: CIELAB->sRGB conversion in " << cielab_timer.getTime() << " microseconds" << endl;
-    }
-  }
-
-  // Apply normalization and float conversion
-  filter_normalize( rawtile, (*session->image)->max, (*session->image)->min );
-
-  // Apply any contrast adjustments and/or clipping to 8bit
-  filter_contrast( rawtile, session->view->getContrast() );
-
-
-  // Compress to JPEG
-  if( ct == UNCOMPRESSED ){
-    if( session->loglevel >= 4 ) *(session->logfile) << "Zoomify :: Compressing UNCOMPRESSED to JPEG" << endl;
-    len = session->jpeg->Compress( rawtile );
-  }
-
-
-#ifndef DEBUG
-  char str[1024];
-  snprintf( str, 1024,
-	    "Server: iipsrv/%s\r\n"
-	    "Content-Type: image/jpeg\r\n"
-            "Content-Length: %d\r\n"
-	    "Cache-Control: max-age=%d\r\n"
-	    "Last-Modified: %s\r\n"
-	    "\r\n",
-	    VERSION, len, MAX_AGE, (*session->image)->getTimestamp().c_str() );
-
-  session->out->printf( (const char*) str );
-#endif
-
-
-  if( session->out->putStr( (const char*) rawtile.data, len ) != len ){
-    if( session->loglevel >= 1 ){
-      *(session->logfile) << "Zoomify :: Error writing jpeg tile" << endl;
-    }
-  }
-
-
-  if( session->out->flush() == -1 ) {
-    if( session->loglevel >= 1 ){
-      *(session->logfile) << "Zoomify :: Error flushing jpeg tile" << endl;
-    }
-  }
-
-
-  // Inform our response object that we have sent something to the client
-  session->response->setImageSent();
+  // Simply pass this on to our JTL send command
+  JTL jtl;
+  jtl.send( session, resolution, tile );
 
 
   // Total Zoomify response time

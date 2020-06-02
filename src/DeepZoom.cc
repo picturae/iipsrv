@@ -1,13 +1,13 @@
 /*
     IIP DeepZoom Request Command Handler Class Member Function
 
-    Development supported by Moravian Library in Brno (Moravska zemska 
-    knihovna v Brne, http://www.mzk.cz/) R&D grant MK00009494301 & Old 
-    Maps Online (http://www.oldmapsonline.org/) from the Ministry of 
-    Culture of the Czech Republic. 
+    Development supported by Moravian Library in Brno (Moravska zemska
+    knihovna v Brne, http://www.mzk.cz/) R&D grant MK00009494301 & Old
+    Maps Online (http://www.oldmapsonline.org/) from the Ministry of
+    Culture of the Czech Republic.
 
 
-    Copyright (C) 2009-2013 Ruven Pillay.
+    Copyright (C) 2009-2020 Ruven Pillay.
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -35,7 +35,7 @@ using namespace std;
 
 
 // Windows does not provide a log2 function!
-#if (!defined HAVE_LOG2) || (defined _MSC_VER)
+#if (!defined HAVE_LOG2 && !defined _MSC_VER) || (defined _MSC_VER && _MSC_VER<1900)
 double log2(double max){
   return log((double)max)/log((double)2);
 }
@@ -45,7 +45,6 @@ double log2(double max){
 void DeepZoom::run( Session* session, const std::string& argument ){
 
   if( session->loglevel >= 3 ) (*session->logfile) << "DeepZoom handler reached" << endl;
-  session = session;
 
   // Time this command
   if( session->loglevel >= 2 ) command_timer.start();
@@ -70,9 +69,6 @@ void DeepZoom::run( Session* session, const std::string& argument ){
   // As we don't have an independent FIF request, we need to run it now
   FIF fif;
   fif.run( session, prefix );
-
-  // Load image info
-  (*session->image)->loadImageInfo( session->view->xangle, session->view->yangle );
 
 
   // Get the full image size and the total number of resolutions available
@@ -109,21 +105,16 @@ void DeepZoom::run( Session* session, const std::string& argument ){
 			  << ", image height: " << height << endl;
     }
 
-    char str[1024];
-    snprintf( str, 1024,
-	      "Server: iipsrv/%s\r\n"
-	      "Content-Type: application/xml\r\n"
-	      "Cache-Control: max-age=%d\r\n"
-	      "Last-Modified: %s\r\n"
-	      "\r\n"
-	      "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n"
-	      "<Image xmlns=\"http://schemas.microsoft.com/deepzoom/2008\"\r\n"
-	      "TileSize=\"%d\" Overlap=\"0\" Format=\"jpg\">"
-	      "<Size Width=\"%d\" Height=\"%d\"/>"
-	      "</Image>",
-	      VERSION, MAX_AGE, (*session->image)->getTimestamp().c_str(), tw, width, height );
 
-    session->out->printf( (const char*) str );
+    // Format our output
+    stringstream header;
+    header << session->response->createHTTPHeader( "xml", (*session->image)->getTimestamp() )
+	   << "<Image xmlns=\"http://schemas.microsoft.com/deepzoom/2008\" "
+	   << "TileSize=\"" << tw << "\" Overlap=\"0\" Format=\"jpg\">"
+	   << "<Size Width=\"" << width << "\" Height=\"" << height << "\"/>"
+	   << "</Image>";
+
+    session->out->printf( (const char*) header.str().c_str() );
     session->response->setImageSent();
 
     return;
@@ -132,7 +123,7 @@ void DeepZoom::run( Session* session, const std::string& argument ){
 
   // Get the tile coordinates. DeepZoom requests are of the form $image_files/r/x_y.jpg
   // where r is the resolution number and x and y are the tile coordinates
-  
+
   int resolution, x, y;
   unsigned int n, n1, n2;
 
@@ -152,7 +143,7 @@ void DeepZoom::run( Session* session, const std::string& argument ){
   // Take into account the extra zoom levels required by the DeepZoom spec
   resolution = resolution - (dzi_res-numResolutions) - 1;
   if( resolution < 0 ) resolution = 0;
-  if( (unsigned int)resolution > numResolutions ) resolution = numResolutions-1;
+  if( (unsigned int)resolution > numResolutions-1 ) resolution = numResolutions-1;
 
   if( session->loglevel >= 2 ){
     *(session->logfile) << "DeepZoom :: Tile request for resolution: "
@@ -175,88 +166,10 @@ void DeepZoom::run( Session* session, const std::string& argument ){
   unsigned int tile = y*ntlx + x;
 
 
-  // Get our tile
-  TileManager tilemanager( session->tileCache, *session->image, session->watermark, session->jpeg, session->logfile, session->loglevel );
+  // Simply pass this on to our JTL send command
+  JTL jtl;
+  jtl.send( session, resolution, tile );
 
-  CompressionType ct;
-  if( (*session->image)->getColourSpace() == CIELAB ) ct = UNCOMPRESSED;
-  else if( (*session->image)->getNumBitsPerPixel() == 16 ) ct = UNCOMPRESSED;
-  else ct = JPEG;
-
-
-  RawTile rawtile = tilemanager.getTile( resolution, tile, session->view->xangle,
-					 session->view->yangle, session->view->getLayers(), ct );
-
-  int len = rawtile.dataLength;
-
-  if( session->loglevel >= 3 ){
-    *(session->logfile) << "DeepZoom :: Tile size: " << rawtile.width << " x " << rawtile.height << endl
-			<< "DeepZoom :: Channels per sample: " << rawtile.channels << endl
-			<< "DeepZoom :: Bits per channel: " << rawtile.bpc << endl
-			<< "DeepZoom :: Compressed tile size is " << len << endl;
-  }
-
-
-  // Convert CIELAB to sRGB
-  if( (*session->image)->getColourSpace() == CIELAB ){
-
-    Timer cielab_timer;
-    if( session->loglevel >= 4 ){
-      *(session->logfile) << "JTL :: Converting from CIELAB->sRGB" << endl;
-      cielab_timer.start();
-    }
-
-    filter_LAB2sRGB( rawtile );
-
-    if( session->loglevel >= 4 ){
-      *(session->logfile) << "JTL :: CIELAB->sRGB conversion in " << cielab_timer.getTime() << " microseconds" << endl;
-    }
-  }
-
-  // Apply normalization and float conversion
-  filter_normalize( rawtile, (*session->image)->max, (*session->image)->min );
-
-  // Apply any contrast adjustments and/or clipping to 8bit
-  filter_contrast( rawtile, session->view->getContrast() );
-
-  // Compress to JPEG
-  if( ct == UNCOMPRESSED ){
-    if( session->loglevel >= 4 ) *(session->logfile) << "DeepZoom :: Compressing UNCOMPRESSED to JPEG" << endl;
-    len = session->jpeg->Compress( rawtile );
-  }
-
-
-#ifndef DEBUG
-  char str[1024];
-  snprintf( str, 1024,
-	    "Server: iipsrv/%s\r\n"
-	    "Content-Type: image/jpeg\r\n"
-            "Content-Length: %d\r\n"
-	    "Cache-Control: max-age=%d\r\n"
-	    "Last-Modified: %s\r\n"
-	    "\r\n",
-	    VERSION, len, MAX_AGE, (*session->image)->getTimestamp().c_str() );
-
-  session->out->printf( (const char*) str );
-#endif
-
-
-  if( session->out->putStr( (const char*) rawtile.data, len ) != len ){
-    if( session->loglevel >= 1 ){
-      *(session->logfile) << "DeepZoom :: Error writing jpeg tile" << endl;
-    }
-  }
-
-
-  if( session->out->flush() == -1 ) {
-    if( session->loglevel >= 1 ){
-      *(session->logfile) << "DeepZoom :: Error flushing jpeg tile" << endl;
-    }
-  }
-
-
-  // Inform our response object that we have sent something to the client
-  session->response->setImageSent();
 
   // Total DeepZoom response time
   if( session->loglevel >= 2 ){

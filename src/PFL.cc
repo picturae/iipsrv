@@ -1,7 +1,7 @@
 /*
     IIP Profile Command Handler Class Member Function
 
-    Copyright (C) 2013 Ruven Pillay.
+    Copyright (C) 2013-2019 Ruven Pillay.
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -20,7 +20,7 @@
 
 #include "Task.h"
 #include <cmath>
-#include <sstream>
+#include <iomanip>
 
 using namespace std;
 
@@ -38,7 +38,7 @@ void PFL::run( Session* session, const std::string& argument ){
 
   if( session->loglevel >= 3 ) (*session->logfile) << "PFL handler reached" << endl;
 
-  unsigned int resolution, x1, y1, x2, y2, width, height;
+  int resolution, x1, y1, x2, y2, width, height;
 
 
   // Time this command
@@ -73,17 +73,29 @@ void PFL::run( Session* session, const std::string& argument ){
   }
 
 
-  if( session->loglevel >= 5 ){ 
+  if( session->loglevel >= 5 ){
     (*session->logfile) << "PFL :: Resolution: " << resolution
-			<< ", Position: " << x1 << "," << y1 << " - " 
+			<< ", Position: " << x1 << "," << y1 << " - "
 			<< x2 << "," << y2 << endl;
   }
 
 
   // Make sure we don't request impossible resolutions
-  if( resolution<0 || resolution>=(*session->image)->getNumResolutions() ){
+  if( resolution<0 || resolution>=(int)(*session->image)->getNumResolutions() ){
     ostringstream error;
-    error << "PFL :: Invalid resolution number: " << resolution; 
+    error << "PFL :: Invalid resolution number: " << resolution;
+    throw error.str();
+  }
+
+  // Get the width and height for this resolution
+  unsigned int num_res = (*session->image)->getNumResolutions();
+  int im_width = (int)(*session->image)->image_widths[num_res-resolution-1];
+  int im_height = (int)(*session->image)->image_heights[num_res-resolution-1];
+
+  // Check for impossible coordinates
+  if( x1<0 || x2<0 || y1<0 || y2<0 || x1>im_width || x2>im_width || y1>im_height || y2>im_height ){
+    ostringstream error;
+    error << "PFL :: Invalid coordinates: " << x1 << "," << y1 << "-" << x2 << "," << y2 << endl;
     throw error.str();
   }
 
@@ -113,7 +125,6 @@ void PFL::run( Session* session, const std::string& argument ){
   list <int> :: const_iterator i;
   unsigned int n = views.size();
 
-
   // Put the results into a string stream
   ostringstream profile;
   profile.precision(6);
@@ -136,11 +147,11 @@ void PFL::run( Session* session, const std::string& argument ){
     // Get the region of data for this wavelength and line profile
     RawTile rawtile = tilemanager.getRegion( resolution, wavelength, session->view->yangle, session->view->getLayers(), x1, y1, width, height );
 
-
     // Loop through our pixels
+    length *= rawtile.channels;
     for( unsigned int j=0; j<length; j++ ){
 
-      float intensity;
+      float intensity = 0.0;
       void *ptr;
 
       // Handle depending on bit depth
@@ -163,7 +174,7 @@ void PFL::run( Session* session, const std::string& argument ){
 	}
       }
 
-      if( rawtile.sampleType == FLOATINGPOINT ) profile << fixed;
+      if( rawtile.sampleType == FLOATINGPOINT ) profile << fixed << setprecision(9);
       profile << intensity;
       if( j < length-1 ) profile << ",";
 
@@ -180,19 +191,14 @@ void PFL::run( Session* session, const std::string& argument ){
   profile << "}";
 
 
-  // Send out our JSON header
 #ifndef DEBUG
-  char str[1024];
-  snprintf( str, 1024,
-	    "Server: iipsrv/%s\r\n"
-	    "Content-Type: application/json\r\n"
-	    "Cache-Control: max-age=%d\r\n"
-	    "Last-Modified: %s\r\n"
-	    "\r\n",
-	    VERSION, MAX_AGE, (*session->image)->getTimestamp().c_str() );
 
-  session->out->printf( (const char*) str );
+  // Send out our JSON header
+  stringstream header;
+  header << session->response->createHTTPHeader( "json", (*session->image)->getTimestamp() );
+  session->out->printf( (const char*) header.str().c_str() );
   session->out->flush();
+
 #endif
 
   // Send the data itself

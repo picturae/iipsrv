@@ -1,9 +1,9 @@
-// IIPImage.cc 
+// IIPImage.cc
 
 
 /*  IIP fcgi server module
 
-    Copyright (C) 2000-2013 Ruven Pillay.
+    Copyright (C) 2000-2019 Ruven Pillay.
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -32,105 +32,53 @@
 #endif
 
 #include <cstdio>
-#include <sys/stat.h>
+#include <cstring>
 #include <sstream>
+#include <algorithm>
+#include <sys/stat.h>
 
 
 using namespace std;
 
 
 
-IIPImage::IIPImage()
+// Swap function
+void IIPImage::swap( IIPImage& first, IIPImage& second ) // nothrow
 {
-  isFile = false;
-  bpp = 0;
-  channels = 0;
-  quality_layers = 0;
-  isSet = false;
-  currentX = 0;
-  currentY = 90;
-  timestamp = 0;
+  // Swap the members of the two objects
+  std::swap( first.imagePath, second.imagePath );
+  std::swap( first.isFile, second.isFile );
+  std::swap( first.suffix, second.suffix );
+  std::swap( first.virtual_levels, second.virtual_levels );
+  std::swap( first.format, second.format );
+  std::swap( first.fileSystemPrefix, second.fileSystemPrefix );
+  std::swap( first.fileSystemSuffix, second.fileSystemSuffix );
+  std::swap( first.fileNamePattern, second.fileNamePattern );
+  std::swap( first.horizontalAnglesList, second.horizontalAnglesList );
+  std::swap( first.verticalAnglesList, second.verticalAnglesList );
+  std::swap( first.lut, second.lut );
+  std::swap( first.image_widths, second.image_widths );
+  std::swap( first.image_heights, second.image_heights );
+  std::swap( first.tile_width, second.tile_width );
+  std::swap( first.tile_height, second.tile_height );
+  std::swap( first.dpi_x, second.dpi_x );
+  std::swap( first.dpi_y, second.dpi_y );
+  std::swap( first.dpi_units, second.dpi_units );
+  std::swap( first.numResolutions, second.numResolutions );
+  std::swap( first.bpc, second.bpc );
+  std::swap( first.channels, second.channels );
+  std::swap( first.sampleType, second.sampleType );
+  std::swap( first.quality_layers, second.quality_layers );
+  std::swap( first.colourspace, second.colourspace );
+  std::swap( first.isSet, second.isSet );
+  std::swap( first.currentX, second.currentX );
+  std::swap( first.currentY, second.currentY );
+  std::swap( first.histogram, second.histogram );
+  std::swap( first.metadata, second.metadata );
+  std::swap( first.timestamp, second.timestamp );
+  std::swap( first.min, second.min );
+  std::swap( first.max, second.max );
 }
-
-
-
-IIPImage::IIPImage ( const string& p )
-{
-  isFile = false;
-  bpp = 0;
-  channels = 0;
-  quality_layers = 0;
-  isSet = false;
-  currentX = 0;
-  currentY = 90;
-  timestamp = 0;
-  imagePath = p;
-}
-
-
-
-// Copy constructor
-IIPImage::IIPImage( const IIPImage& image )
-{
-  imagePath = image.imagePath;
-  isFile = image.isFile;
-  type = image.type;
-  fileSystemPrefix = image.fileSystemPrefix;
-  fileNamePattern = image.fileNamePattern;
-  horizontalAnglesList = image.horizontalAnglesList;
-  verticalAnglesList = image.verticalAnglesList;
-  image_widths = image.image_widths;
-  image_heights = image.image_heights;
-  tile_width = image.tile_width;
-  tile_height = image.tile_height;
-  numResolutions = image.numResolutions;
-  bpp = image.bpp;
-  channels = image.channels;
-  sampleType = image.sampleType;
-  quality_layers = image.quality_layers;
-  colourspace = image.colourspace;
-  isSet = image.isSet;
-  currentX = image.currentX;
-  currentY = image.currentY;
-  metadata = image.metadata;
-  timestamp = image.timestamp;
-  min = image.min;
-  max = image.max;
-}
-
-
-
-// Assignment constructor
-IIPImage& IIPImage::operator = ( const IIPImage& image )
-{
-  if( this != &image ){
-    imagePath = image.imagePath;
-    isFile = image.isFile;
-    type = image.type;
-    fileSystemPrefix = image.fileSystemPrefix;
-    fileNamePattern = image.fileNamePattern;
-    horizontalAnglesList = image.horizontalAnglesList;
-    verticalAnglesList = image.verticalAnglesList;
-    image_widths = image.image_widths;
-    image_heights = image.image_heights;
-    tile_width = image.tile_width;
-    tile_height = image.tile_height;
-    numResolutions = image.numResolutions;
-    bpp = image.bpp;
-    channels = image.channels;
-    sampleType = image.sampleType;
-    quality_layers = image.quality_layers;
-    colourspace = image.colourspace;
-    isSet = image.isSet;
-    currentX = image.currentX;
-    currentY = image.currentY;
-    metadata = image.metadata;
-    timestamp = image.timestamp;
-    min = image.min;
-    max = image.max;
-  }
-  return *this;
-}  
 
 
 
@@ -139,13 +87,56 @@ void IIPImage::testImageType()
   // Check whether it is a regular file
   struct stat sb;
 
-  string path = fileSystemPrefix + imagePath;
+  string path = fileSystemPrefix + imagePath + fileSystemSuffix;
+  const char *pstr = path.c_str();
 
-  if( (stat(path.c_str(),&sb)==0) && S_ISREG(sb.st_mode) ){
+
+  if( (stat(pstr,&sb)==0) && S_ISREG(sb.st_mode) ){
+
+    unsigned char header[10];
+
+    // Immediately open our file to reduce (but not eliminate) TOCTOU race condition risks
+    // We should really use open() before fstat() but it's not supported on Windows and
+    // fopen will in any case complain if file no longer readable
+    FILE *im = fopen( pstr, "rb" );
+    if( im == NULL ){
+      string message = "Unable to open file '" + path + "'";
+      throw file_error( message );
+    }
+
+    // Determine our file format using magic file signatures -
+    // read in 10 bytes and immediately close file
+    int len = fread( header, 1, 10, im );
+    fclose( im );
+
+    // Make sure we were able to read enough bytes
+    if( len < 10 ){
+      string message = "Unable to read initial byte sequence from file '" + path + "'";
+      throw file_error( message );
+    }
+
     isFile = true;
-    int dot = imagePath.find_last_of( "." );
-    type = imagePath.substr( dot + 1, imagePath.length() );
     timestamp = sb.st_mtime;
+
+    // Magic file signature for JPEG2000
+    static const unsigned char j2k[10] = {0x00,0x00,0x00,0x0C,0x6A,0x50,0x20,0x20,0x0D,0x0A};
+
+    // Magic file signatures for TIFF (See http://www.garykessler.net/library/file_sigs.html)
+    static const unsigned char stdtiff[3] = {0x49,0x20,0x49};       // TIFF
+    static const unsigned char lsbtiff[4] = {0x49,0x49,0x2A,0x00};  // Little Endian TIFF
+    static const unsigned char msbtiff[4] = {0x4D,0x4D,0x00,0x2A};  // Big Endian TIFF
+    static const unsigned char lbigtiff[4] = {0x4D,0x4D,0x00,0x2B}; // Little Endian BigTIFF
+    static const unsigned char bbigtiff[4] = {0x49,0x49,0x2B,0x00}; // Big Endian BigTIFF
+
+    // Compare our header sequence to our magic byte signatures
+    if( memcmp( header, j2k, 10 ) == 0 ) format = JPEG2000;
+    else if( memcmp( header, stdtiff, 3 ) == 0
+	     || memcmp( header, lsbtiff, 4 ) == 0 || memcmp( header, msbtiff, 4 ) == 0
+	     || memcmp( header, lbigtiff, 4 ) == 0 || memcmp( header, bbigtiff, 4 ) == 0 ){
+      format = TIF;
+    }
+    else format = UNSUPPORTED;
+
   }
   else{
 
@@ -158,12 +149,12 @@ void IIPImage::testImageType()
     if( glob( filename.c_str(), 0, NULL, &gdat ) != 0 ){
       globfree( &gdat );
       string message = path + string( " is neither a file nor part of an image sequence" );
-      throw message;
+      throw file_error( message );
     }
     if( gdat.gl_pathc != 1 ){
       globfree( &gdat );
       string message = string( "There are multiple file extensions matching " )  + filename;
-      throw message;
+      throw file_error( message );
     }
 
     string tmp( gdat.gl_pathv[0] );
@@ -174,13 +165,16 @@ void IIPImage::testImageType()
     int dot = tmp.find_last_of( "." );
     int len = tmp.length();
 
-    type = tmp.substr( dot + 1, len );
+    suffix = tmp.substr( dot + 1, len );
+    if( suffix == "jp2" || suffix == "jpx" || suffix == "j2k" ) format = JPEG2000;
+    else if( suffix == "tif" || suffix == "tiff" ) format = TIF;
+    else format = UNSUPPORTED;
 
     updateTimestamp( tmp );
 
 #else
-    string message = path + string( " is not a file and no glob support enabled" );
-    throw message;
+    string message = path + string( " is not a regular file and no glob support enabled" );
+    throw file_error( message );
 #endif
 
   }
@@ -189,14 +183,14 @@ void IIPImage::testImageType()
 
 
 
-void IIPImage::updateTimestamp( const string& path ) throw(string)
+void IIPImage::updateTimestamp( const string& path )
 {
   // Get a modification time for our image
   struct stat sb;
 
   if( stat( path.c_str(), &sb ) == -1 ){
     string message = string( "Unable to open file " ) + path;
-    throw message;
+    throw file_error( message );
   }
   timestamp = sb.st_mtime;
 }
@@ -225,8 +219,8 @@ void IIPImage::measureVerticalAngles()
   glob_t gdat;
   unsigned int i;
 
-  string filename = fileSystemPrefix + imagePath + fileNamePattern + "000_*." + type;
-  
+  string filename = fileSystemPrefix + imagePath + fileNamePattern + "000_*." + suffix;
+
   if( glob( filename.c_str(), 0, NULL, &gdat ) != 0 ){
     globfree( &gdat );
   }
@@ -236,7 +230,7 @@ void IIPImage::measureVerticalAngles()
     // Extract angle no from path name.
     int angle;
     string tmp( gdat.gl_pathv[i] );
-    int len = tmp.length() - type.length() - 1;
+    int len = tmp.length() - suffix.length() - 1;
     string sequence_no = tmp.substr( len-3, 3 );
     istringstream(sequence_no) >> angle;
     verticalAnglesList.push_front( angle );
@@ -261,7 +255,7 @@ void IIPImage::measureHorizontalAngles()
   glob_t gdat;
   unsigned int i;
 
-  string filename = fileSystemPrefix + imagePath + fileNamePattern + "*_090." + type;
+  string filename = fileSystemPrefix + imagePath + fileNamePattern + "*_090." + suffix;
 
   if( glob( filename.c_str(), 0, NULL, &gdat ) != 0 ){
     globfree( &gdat );
@@ -315,13 +309,13 @@ const string IIPImage::getFileName( int seq, int ang )
   char name[1024];
 
   if( isFile ){
-    return fileSystemPrefix+imagePath;
+    return fileSystemPrefix+imagePath+fileSystemSuffix;
   }
   else{
     // The angle or spectral band indices should be a minimum of 3 digits when padded
     snprintf( name, 1024,
 	      "%s%s%03d_%03d.%s", (fileSystemPrefix+imagePath).c_str(), fileNamePattern.c_str(),
-	      seq, ang, type.c_str() );
+	      seq, ang, suffix.c_str() );
     return string( name );
   }
 }
@@ -341,5 +335,3 @@ int operator != ( const IIPImage& A, const IIPImage& B )
   if( A.imagePath != B.imagePath ) return( 1 );
   else return( 0 );
 }
-
-

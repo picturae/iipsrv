@@ -2,7 +2,7 @@
 
 /*  IIP Image Server
 
-    Copyright (C) 2000-2013 Ruven Pillay.
+    Copyright (C) 2000-2019 Ruven Pillay.
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -31,7 +31,7 @@
 
 
 /// Colour spaces - GREYSCALE, sRGB and CIELAB
-enum ColourSpaces { NONE, GREYSCALE, sRGB, CIELAB };
+enum ColourSpaces { NONE, GREYSCALE, sRGB, CIELAB, BINARY };
 
 /// Compression Types
 enum CompressionType { UNCOMPRESSED, JPEG, DEFLATE, PNG };
@@ -79,7 +79,7 @@ class RawTile{
   int memoryManaged;
 
   /// The size of the data pointed to by data
-  int dataLength;
+  unsigned int dataLength;
 
   /// The width in pixels of this tile
   unsigned int width;
@@ -141,11 +141,6 @@ class RawTile{
   /// Copy constructor - handles copying of data buffer
   RawTile( const RawTile& tile ) {
 
-    dataLength = tile.dataLength;
-    width = tile.width;
-    height = tile.height;
-    channels = tile.channels;
-    bpc = tile.bpc;
     tileNum = tile.tileNum;
     resolution = tile.resolution;
     hSequence = tile.hSequence;
@@ -154,6 +149,12 @@ class RawTile{
     quality = tile.quality;
     filename = tile.filename;
     timestamp = tile.timestamp;
+    memoryManaged = tile.memoryManaged;
+    dataLength = tile.dataLength;
+    width = tile.width;
+    height = tile.height;
+    channels = tile.channels;
+    bpc = tile.bpc;
     sampleType = tile.sampleType;
     padded = tile.padded;
 
@@ -180,11 +181,6 @@ class RawTile{
   /// Copy assignment constructor
   RawTile& operator= ( const RawTile& tile ) {
 
-    dataLength = tile.dataLength;
-    width = tile.width;
-    height = tile.height;
-    channels = tile.channels;
-    bpc = tile.bpc;
     tileNum = tile.tileNum;
     resolution = tile.resolution;
     hSequence = tile.hSequence;
@@ -193,6 +189,12 @@ class RawTile{
     quality = tile.quality;
     filename = tile.filename;
     timestamp = tile.timestamp;
+    memoryManaged = tile.memoryManaged;
+    dataLength = tile.dataLength;
+    width = tile.width;
+    height = tile.height;
+    channels = tile.channels;
+    bpc = tile.bpc;
     sampleType = tile.sampleType;
     padded = tile.padded;
 
@@ -219,7 +221,7 @@ class RawTile{
 
 
   /// Return the size of the data
-  int size() { return dataLength; }
+  unsigned int size() { return dataLength; }
 
 
   /// Overloaded equality operator
